@@ -1,7 +1,10 @@
 from sympy import *
 from time import time
 from mpmath import radians
+import numpy as np
 import tf
+rtd = 180./np.pi # radians to degrees
+dtr = np.pi/180. # degrees to radians
 
 '''
 Format of test case is [ [[EE position],[EE orientation as quaternions]],[WC location],[joint angles]]
@@ -22,8 +25,95 @@ test_cases = {1:[[[2.16135,-1.42635,1.55109],
                   [0.01735,-0.2179,0.9025,0.371016]],
                   [-1.1669,-0.17989,0.85137],
                   [-2.99,-0.12,0.94,4.06,1.29,-4.12]],
-              4:[],
+              4:[[[0, 0,0],
+                  [0,0,0,1]],
+                  [-1.1669,-0.17989,0.85137],
+                  [-2.99,-0.12,0.94,4.06,1.29,-4.12]],
               5:[]}
+
+
+def rpyToRotation(r, p, y):
+    
+    ROT = Matrix([
+                 [cos(p)*cos(y), sin(p)*sin(r)*cos(y) - sin(y)*cos(r), sin(p)*cos(r)*cos(y) + sin(r)*sin(y)],
+                 [sin(y)*cos(p), sin(p)*sin(r)*sin(y) + cos(r)*cos(y), sin(p)*sin(y)*cos(r) - sin(r)*cos(y)],
+                 [      -sin(p),                        sin(r)*cos(p),                        cos(p)*cos(r)]])
+
+    Rot_correct = Matrix([
+                          [0.,   0., 1.0],
+                          [0., -1.0,  0.],
+                          [1.0,  0.,  0.]])
+
+    ROT = ROT * Rot_correct
+    
+    return sym_num(ROT)
+
+## convert a sympy matrix to a numpy
+def sym_num(sym):
+    
+    return np.array(sym.tolist()).astype(np.float64)
+    
+
+
+ ##  Get the rotation matrix from base to WC, using q1, q2, q3
+def eval_r0_3(q1, q2, q3):
+    
+    
+    R0_3_eval = Matrix([
+           [-sin(q3)*sin(q2 - 0.5*pi)*cos(q1) + cos(q1)*cos(q3)*cos(q2 - 0.5*pi), -sin(q3)*cos(q1)*cos(q2 - 0.5*pi) - sin(q2 - 0.5*pi)*cos(q1)*cos(q3), -sin(q1)],
+           [-sin(q1)*sin(q3)*sin(q2 - 0.5*pi) + sin(q1)*cos(q3)*cos(q2 - 0.5*pi), -sin(q1)*sin(q3)*cos(q2 - 0.5*pi) - sin(q1)*sin(q2 - 0.5*pi)*cos(q3),  cos(q1)],
+           [                -sin(q3)*cos(q2 - 0.5*pi) - sin(q2 - 0.5*pi)*cos(q3),                  sin(q3)*sin(q2 - 0.5*pi) - cos(q3)*cos(q2 - 0.5*pi),        0]])
+    
+    return sym_num(R0_3_eval) 
+
+
+
+
+
+
+def Trans0_EE(theta1, theta2, theta3, theta4, theta5, theta6):
+    
+    d1, d2, d3, d4, d5, d6, d7 = symbols('d1:8')   # link offset 
+    a0, a1, a2, a3, a4, a5, a6 = symbols('a0:7')    # link length
+    alpha0, alpha1, alpha2, alpha3, alpha4, alpha5, alpha6 = symbols('alpha0:7')  # twist angle 
+    
+    q1, q2, q3, q4, q5, q6, q7 = symbols('q1:8')    # joint angle 
+    
+        ## DH table   why offset 0.42??  0.
+    DH_Table = { alpha0:      0,  a0:      0, d1:  0.75,    q1:          q1,
+                 alpha1: -pi/2.,  a1:   0.35, d2:     0,    q2: -pi/2. + q2,
+                 alpha2:      0,  a2:   1.25, d3:     0,    q3:          q3,
+                 alpha3: -pi/2.,  a3: -0.054, d4:   1.5,    q4:          q4,
+                 alpha4:  pi/2.,  a4:      0, d5:     0,    q5:          q5,
+                 alpha5: -pi/2.,  a5:      0, d6:     0,    q6:          q6,
+                 alpha6:      0,  a6:      0, d7: 0.303,    q7:           0
+                 }
+     
+    T0_1  = TF_Matrix(alpha0, a0, d1, q1).subs(DH_Table) 
+    T1_2  = TF_Matrix(alpha1, a1, d2, q2).subs(DH_Table)   
+    T2_3  = TF_Matrix(alpha2, a2, d3, q3).subs(DH_Table) 
+    T3_4  = TF_Matrix(alpha3, a3, d4, q4).subs(DH_Table) 
+    T4_5  = TF_Matrix(alpha4, a4, d5, q5).subs(DH_Table)   
+    T5_6  = TF_Matrix(alpha5, a5, d6, q6).subs(DH_Table)     
+    T6_EE = TF_Matrix(alpha6, a6, d7, q7).subs(DH_Table)
+    
+    T0_EE = T0_1 * T1_2 * T2_3 * T3_4 * T4_5 * T5_6 * T6_EE 
+    FK = T0_EE.evalf(subs={q1: theta1, q2: theta2, q3: theta3, q4: theta4, q5: theta5, q6: theta6})
+    return FK
+
+    
+
+
+
+
+def TF_Matrix(alpha, a, d, q):
+    
+    TF = Matrix([[            cos(q),           -sin(q),           0,             a],
+                   [ sin(q)*cos(alpha), cos(q)*cos(alpha), -sin(alpha), -sin(alpha)*d],
+                   [ sin(q)*sin(alpha), cos(q)*sin(alpha),  cos(alpha),  cos(alpha)*d],
+                   [                 0,                 0,           0,             1]])
+    return TF
+
 
 
 def test_code(test_case):
@@ -45,6 +135,7 @@ def test_code(test_case):
     position = Position(test_case[0][0])
     orientation = Orientation(test_case[0][1])
 
+
     class Combine:
         def __init__(self,position,orientation):
             self.position = position
@@ -58,38 +149,71 @@ def test_code(test_case):
 
     req = Pose(comb)
     start_time = time()
+
+ 
+
+
+
+
+
+    px = req.poses[x].position.x
+    py = req.poses[x].position.y
+    pz = req.poses[x].position.z
+
+    (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(
+        [req.poses[x].orientation.x, req.poses[x].orientation.y,
+        req.poses[x].orientation.z, req.poses[x].orientation.w])
+
+    print ("rpppy", [roll, pitch, yaw])
+
+    ROT_EE = rpyToRotation(roll, pitch, yaw)
+
+
+    EE = [px,py,pz]
     
-    ########################################################################################
-    ## 
+    WC = EE - (0.303) * ROT_EE[:, 2]
 
-    ## Insert IK code here!
+
+    ## calculate joint angles using Geometric IK method 
+    theta1 = atan2(WC[1], WC[0])
     
-    theta1 = 0
-    theta2 = 0
-    theta3 = 0
-    theta4 = 0
-    theta5 = 0
-    theta6 = 0
-
-    ## 
-    ########################################################################################
+    side_a =  1.501
+    side_b = sqrt(pow((sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35), 2) + pow((WC[2] - 0.75), 2))
+    side_c = 1.25
     
-    ########################################################################################
-    ## For additional debugging add your forward kinematics here. Use your previously calculated thetas
-    ## as the input and output the position of your end effector as your_ee = [x,y,z]
+    angle_a = acos((side_b * side_b + side_c * side_c - side_a * side_a) / (2 * side_b * side_c))
+    angle_b = acos((side_a * side_a + side_c * side_c - side_b * side_b) / (2 * side_a * side_c))
+    angle_c = acos((side_a * side_a + side_b * side_b - side_c * side_c) / (2 * side_a * side_b))
+    
+    theta2 = pi / 2 - angle_a - atan2(WC[2] - 0.75, sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35)
+    theta3 = pi / 2 - (angle_b + 0.036)
+    
+    R0_3 = eval_r0_3(theta1, theta2, theta3)
 
-    ## (OPTIONAL) YOUR CODE HERE!
 
-    ## End your code input for forward kinematics here!
-    ########################################################################################
+    R3_6 = np.dot(np.linalg.inv(R0_3), ROT_EE)
+    
+    theta4 = atan2(R3_6[2, 2], -R3_6[0, 2])
+    theta5 = atan2(sqrt(R3_6[0, 2] * R3_6[0, 2] + R3_6[2, 2] * R3_6[2, 2]), R3_6[1, 2])
+    theta6 = atan2(-R3_6[1, 1], R3_6[1, 0])
 
-    ## For error analysis please set the following variables of your WC location and EE location in the format of [x,y,z]
-    your_wc = [1,1,1] # <--- Load your calculated WC values in this array
-    your_ee = [1,1,1] # <--- Load your calculated end effector value from your forward kinematics
-    ########################################################################################
+    Invers_joint = [theta1, theta2, theta3, theta4, theta5, theta6]
+    print ("inversKin:", Invers_joint)
+
+    print ("\nTotal run time to calculate joint angles from pose is %04.4f seconds" % (time()-start_time))   
+
+    FK = Trans0_EE(theta1, theta2, theta3, theta4, theta5, theta6)
+    
+
+
+
+    your_wc = [WC[0],WC[1],WC[2]]
+    your_ee = [FK[0,3],FK[1,3],FK[2,3]]
+    
+
 
     ## Error analysis
-    print ("\nTotal run time to calculate joint angles from pose is %04.4f seconds" % (time()-start_time))
+    #print ("\nTotal run time to calculate joint angles from pose is %04.4f seconds" % (time()-start_time))
 
     # Find WC error
     if not(sum(your_wc)==3):
@@ -131,11 +255,114 @@ def test_code(test_case):
         print ("End effector error for z position is: %04.8f" % ee_z_e)
         print ("Overall end effector offset is: %04.8f units \n" % ee_offset)
 
+'''
+    px = req.poses[x].position.x
+    py = req.poses[x].position.y
+    pz = req.poses[x].position.z
+
+    (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(
+        [req.poses[x].orientation.x, req.poses[x].orientation.y,
+        req.poses[x].orientation.z, req.poses[x].orientation.w])
+   
 
 
+    r, p, y = symbols('r p y')
+    
+    ROT_x = Matrix([[ 1,             0,        0],
+                    [ 0,        cos(r),  -sin(r)],
+                    [ 0,        sin(r),  cos(r)]])
+
+    ROT_y = Matrix([[ cos(p),        0,   sin(p)],
+                    [      0,        1,        0],
+                    [-sin(p),        0,  cos(p)]])
+
+    ROT_z = Matrix([[ cos(y),   -sin(y),        0],
+                    [ sin(y),    cos(y),        0],
+                    [ 0,              0,        1]])
+
+    ROT_EE = ROT_z * ROT_y * ROT_x
+    
+
+    ##  More info can be found in KR219 FK section
+
+    Rot_Error = ROT_z.subs(correct_table) * ROT_y.subs(correct_table)
+    
+    ROT_EE = ROT_EE * Rot_Error 
+    ROT_EE = ROT_EE.evalf(subs={'r': roll, 'p': pitch, 'y': yaw})
+    print ("final", ROT_EE) 
+
+
+
+
+    EE = Matrix([[px],
+                 [py],
+                 [pz]])
+    
+    WC = EE - (0.303) * ROT_EE[:, 2]
+
+
+
+
+    
+
+    ## calculate joint angles using Geometric IK method 
+    theta1 = atan2(WC[1], WC[0])
+    
+    side_a =  1.501
+    side_b = sqrt(pow((sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35), 2) + pow((WC[2] - 0.75), 2))
+    side_c = 1.25
+    
+    angle_a = acos((side_b * side_b + side_c * side_c - side_a * side_a) / (2 * side_b * side_c))
+    angle_b = acos((side_a * side_a + side_c * side_c - side_b * side_b) / (2 * side_a * side_c))
+    angle_c = acos((side_a * side_a + side_b * side_b - side_c * side_c) / (2 * side_a * side_b))
+    
+    theta2 = pi / 2 - angle_a - atan2(WC[2] - 0.75, sqrt(WC[0] * WC[0] + WC[1] * WC[1]) - 0.35)
+    theta3 = pi / 2 - (angle_b + 0.036)
+    
+    R0_3 = T0_1[0:3, 0:3] * T1_2[0:3, 0:3] * T2_3[0:3, 0:3]
+    R0_3 = R0_3.evalf(subs={q1: theta1, q2: theta2, q3: theta3})
+    
+    R3_6 = R0_3.inv("LU") * ROT_EE 
+    
+    #theta4 = atan2(R3_6[2, 2], -R3_6[0, 2])
+    #theta5 = atan2(sqrt(R3_6[0, 2] * R3_6[0, 2] + R3_6[2, 2] * R3_6[2, 2]), R3_6[1, 2])
+    #theta6 = atan2(-R3_6[1, 1], R3_6[1, 0])
+
+    theta4 = 0
+    theta5 = 0
+    theta6 = 0
+
+    FK = T0_EE.evalf(subs={q1: theta1, q2: theta2, q3: theta3, q4: theta4, q5: theta5, q6: theta6})
+    
+'''
+
+'''
+    ## 
+    ########################################################################################
+    
+    ########################################################################################
+    ## For additional debugging add your forward kinematics here. Use your previously calculated thetas
+    ## as the input and output the position of your end effector as your_ee = [x,y,z]
+
+    ## (OPTIONAL) YOUR CODE HERE!
+
+    ## End your code input for forward kinematics here!
+    ########################################################################################
+
+    
+
+    ## For error analysis please set the following variables of your WC location and EE location in the format of [x,y,z]
+    your_wc = [WC[0],WC[1],WC[2]]
+    #your_wc = [0,0,0.3]
+
+
+
+    your_ee = [FK[0,3],FK[1,3],FK[2,3]] # <--- Load your calculated end effector value from your forward kinematics
+'''
 
 if __name__ == "__main__":
     # Change test case number for different scenarios
     test_case_number = 1
 
     test_code(test_cases[test_case_number])
+    print ("done")
